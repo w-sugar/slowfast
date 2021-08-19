@@ -9,6 +9,7 @@ import torch
 from fvcore.nn.precise_bn import get_bn_modules, update_bn_stats
 
 import slowfast.models.losses as losses
+import slowfast.models.loss_virat as losses_virat
 import slowfast.models.optimizer as optim
 import slowfast.utils.checkpoint as cu
 import slowfast.utils.distributed as du
@@ -88,7 +89,8 @@ def train_epoch(
             else:
                 preds = model(inputs)
             # Explicitly declare reduction to mean.
-            loss_fun = losses.get_loss_func(cfg.MODEL.LOSS_FUNC)(reduction="mean")
+            # loss_fun = losses.get_loss_func(cfg.MODEL.LOSS_FUNC)(reduction="mean")
+            loss_fun = losses_virat.BCE_VIRAT()
 
             # Compute the loss.
             loss = loss_fun(preds, labels)
@@ -142,6 +144,8 @@ def train_epoch(
                 if cfg.NUM_GPUS > 1:
                     [loss] = du.all_reduce([loss])
                 loss = loss.item()
+                top1_err = -1
+                top5_err = -1
             else:
                 # Compute the errors.
                 num_topks_correct = metrics.topks_correct(preds, labels, (1, 5))

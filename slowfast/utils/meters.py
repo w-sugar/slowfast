@@ -755,6 +755,8 @@ def get_map(preds, labels):
 
     preds = preds[:, ~(np.all(labels == 0, axis=0))]
     labels = labels[:, ~(np.all(labels == 0, axis=0))]
+    # 新增
+    labels[labels>0] = 1
     aps = [0]
     try:
         aps = average_precision_score(labels, preds, average=None)

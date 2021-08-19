@@ -1,0 +1,7 @@
+person_carries_heavy_object
+person_interacts_object
+person_pickups_object
+person_pulls_object
+person_pushs_object
+person_rides_bicycle
+person_sets_down_object
