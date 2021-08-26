@@ -18,11 +18,12 @@ X3D:
 TEST:
   ENABLE: True
   DATASET: virat
-  BATCH_SIZE: 64
+  BATCH_SIZE: 256 #64
   # CHECKPOINT_FILE_PATH: 'x3d_m.pyth' # 76.21% top1 30-view accuracy to download from the model zoo (optional).
   # NUM_SPATIAL_CROPS: 1
   NUM_SPATIAL_CROPS: 3
   NUM_ENSEMBLE_VIEWS: 1  # 10->1
+  SAVE_RESULTS_PATH: results_sigmoid.pkl
 DATA:
   MULTI_LABEL: True # False
   NUM_FRAMES: 8 #16
@@ -41,7 +42,7 @@ RESNET:
   TRANS_FUNC: x3d_transform
   STRIDE_1X1: False
 BN:
-  USE_PRECISE_STATS: True
+  USE_PRECISE_STATS: False
   NUM_BATCHES_PRECISE: 200
   WEIGHT_DECAY: 0.0
 SOLVER:
@@ -59,12 +60,14 @@ MODEL:
   MODEL_NAME: X3D
   LOSS_FUNC: cross_entropy
   DROPOUT_RATE: 0.5
+  HEAD_ACT: sigmoid # softmax
 DATA_LOADER:
   NUM_WORKERS: 1
   PIN_MEMORY: True
 NUM_GPUS: 2
 RNG_SEED: 0
-OUTPUT_DIR: /data/sugar/checkpoints/slowfast_work_dirs/linear_sample
+OUTPUT_DIR: /data/sugar/checkpoints/slowfast_work_dirs/linear_sample/
+LOG_MODEL_INFO: False
 TENSORBOARD:
   ENABLE: True
   LOG_DIR: ''

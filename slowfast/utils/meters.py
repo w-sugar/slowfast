@@ -384,10 +384,11 @@ class TestMeter(object):
 
         self.stats = {"split": "test_final"}
         if self.multi_label:
-            map = get_map(
+            map, aps = get_map(
                 self.video_preds.cpu().numpy(), self.video_labels.cpu().numpy()
             )
             self.stats["map"] = map
+            self.stats["aps"] = aps
         else:
             num_topks_correct = metrics.topks_correct(
                 self.video_preds, self.video_labels, ks
@@ -723,7 +724,7 @@ class ValMeter(object):
             "RAM": "{:.2f}/{:.2f}G".format(*misc.cpu_mem_usage()),
         }
         if self._cfg.DATA.MULTI_LABEL:
-            stats["map"] = get_map(
+            stats["map"], stats["aps"] = get_map(
                 torch.cat(self.all_preds).cpu().numpy(),
                 torch.cat(self.all_labels).cpu().numpy(),
             )
@@ -767,7 +768,8 @@ def get_map(preds, labels):
         )
 
     mean_ap = np.mean(aps)
-    return mean_ap
+    aps = aps.tolist()
+    return mean_ap, aps
 
 
 class EpochTimer:

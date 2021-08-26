@@ -17,6 +17,7 @@ from slowfast.models.utils import round_width
 
 from . import head_helper, resnet_helper, stem_helper
 from .build import MODEL_REGISTRY
+import copy
 
 # Number of blocks for different stages given the model depth.
 _MODEL_STAGE_DEPTH = {50: (3, 4, 6, 3), 101: (3, 4, 23, 3)}
@@ -747,15 +748,38 @@ class X3D(nn.Module):
                 dim_inner=dim_inner,
                 dim_out=cfg.X3D.DIM_C5,
                 num_classes=cfg.MODEL.NUM_CLASSES,
+                # pool_size=[cfg.DATA.NUM_FRAMES * 2, spat_sz, spat_sz],
                 pool_size=[cfg.DATA.NUM_FRAMES, spat_sz, spat_sz],
                 dropout_rate=cfg.MODEL.DROPOUT_RATE,
                 act_func=cfg.MODEL.HEAD_ACT,
                 bn_lin5_on=cfg.X3D.BN_LIN5,
             )
+        # self.s11 = copy.deepcopy(self.s1)
+        # self.s22 = copy.deepcopy(self.s2)
+        # self.s33 = copy.deepcopy(self.s3)
+        # self.s44 = copy.deepcopy(self.s4)
+        # self.s55 = copy.deepcopy(self.s5)
 
     def forward(self, x, bboxes=None):
         for module in self.children():
             x = module(x)
+        # x, x1 = x[0].chunk(2,1)
+        # x = [x]
+        # x1 = [x1]
+        # x = self.s1(x)
+        # x = self.s2(x)
+        # x = self.s3(x)
+        # x = self.s4(x)
+        # x = self.s5(x)
+
+        # x1 = self.s1(x1)
+        # x1 = self.s2(x1)
+        # x1 = self.s3(x1)
+        # x1 = self.s4(x1)
+        # x1 = self.s5(x1)
+
+        # x = [torch.cat([x[0], x1[0]], dim=2)]
+        # x = self.head(x)
         return x
 
 

@@ -92,12 +92,14 @@ def _get_model_analysis_input(cfg, use_train_input):
     if use_train_input:
         if cfg.TRAIN.DATASET in ["imagenet", "imagenetprefetch"]:
             input_tensors = torch.rand(
+                # rgb_dimension * 2,
                 rgb_dimension,
                 cfg.DATA.TRAIN_CROP_SIZE,
                 cfg.DATA.TRAIN_CROP_SIZE,
             )
         else:
             input_tensors = torch.rand(
+                # rgb_dimension * 2,
                 rgb_dimension,
                 cfg.DATA.NUM_FRAMES,
                 cfg.DATA.TRAIN_CROP_SIZE,
@@ -106,12 +108,14 @@ def _get_model_analysis_input(cfg, use_train_input):
     else:
         if cfg.TEST.DATASET in ["imagenet", "imagenetprefetch"]:
             input_tensors = torch.rand(
+                # rgb_dimension * 2,
                 rgb_dimension,
                 cfg.DATA.TEST_CROP_SIZE,
                 cfg.DATA.TEST_CROP_SIZE,
             )
         else:
             input_tensors = torch.rand(
+                # rgb_dimension * 2,
                 rgb_dimension,
                 cfg.DATA.NUM_FRAMES,
                 cfg.DATA.TEST_CROP_SIZE,

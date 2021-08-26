@@ -21,7 +21,7 @@ from slowfast.datasets.build import DATASET_REGISTRY
 from slowfast.datasets.random_erasing import RandomErasing
 from slowfast.datasets.transform import create_random_augment
 from slowfast.datasets.utils import get_random_sampling_rate, spatial_sampling,\
-    tensor_normalize, pack_pathway_output
+    tensor_normalize, pack_pathway_output, spatial_sampling_bbox
 
 logger = logging.get_logger(__name__)
 
@@ -131,12 +131,15 @@ class Virat(Dataset):
             if dict_anno['duration'] < self._min_len: continue  # 滤除过短clip
             dict_anno_label = dict(filter(lambda kv: kv[0] in self._dict_class_id, dict_anno['label'].items()))  # 保留特定类
             if dict_anno_label:
+                x1, y1, x2, y2 = dict_anno['bbox_clip']
+                # assert x1 < dict_anno['bbox_prop'][0] and x2 > dict_anno['bbox_prop'][2] and y1 < dict_anno['bbox_prop'][1] and y2 > dict_anno['bbox_prop'][3]
                 clip_info = {
                     'dir': join(root_video, dict_anno['video']),  # 帧前缀
                     'fid': dict_anno['fid'],  # 起始帧
                     'len': dict_anno['duration'],  # clip长度
                     'box': dict_anno['bbox_clip'] if self._box_mode == 'clip' \
                         else [x['big'] for x in dict_anno['bbox_frame'].values()],  # clip框或逐帧框
+                    'box_object': list(map(lambda x :x[0]-x[1] ,zip(dict_anno['bbox_prop'],[x1, y1, x1, y1])))
                 }  # 帧信息
                 label = {self._dict_class_id[k]: dict_anno_label[k] if k in dict_anno_label else 0. for k in self._dict_class_id}  # 标签，例：{0:1.0, 1:0.2, ...}
                 label = torch.tensor([label[k] for k in sorted(label)], dtype=torch.float64)
@@ -210,8 +213,10 @@ class Virat(Dataset):
         else:
             frames = tensor_normalize(frames, self.cfg.DATA.MEAN, self.cfg.DATA.STD)
             frames = frames.permute(3, 0, 1, 2)  # [T,H,W,C]→[C,T,H,W]
-            frames = spatial_sampling(
+            boxes = np.array([self._clip_info[index]['box_object']])
+            frames, boxes = spatial_sampling_bbox(
                 frames,
+                boxes,
                 spatial_idx=spatial_sample_index,
                 min_scale=min_scale,
                 max_scale=max_scale,
@@ -220,7 +225,33 @@ class Virat(Dataset):
                 inverse_uniform_sampling=self.cfg.DATA.INV_UNIFORM_SAMPLE,
             )
         label = self._labels[index]
+        # if self.mode == 'train':
+        #     if np.random.uniform() < 0.5 and (label[2] or label[-1]):
+        #         frames = torch.flip(frames, dims=[1])
+        #         tmp = label[2]
+        #         label[2] = label[-1]
+        #         label[-1] = tmp
         frames = pack_pathway_output(self.cfg, frames)
+        height, width = frames[0].shape[-2:]
+        x1, y1, x2, y2 = boxes[0]
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(width, x2)
+        y2 = min(height, y2)
+        frames_object = frames[0][:, :, int(y1):int(y2), int(x1):int(x2)]
+        '''
+        if frames_object.shape[-2] == 0 or frames_object.shape[-1] == 0:
+            # frames_object = frames
+            frames = [frames[0].repeat((2, 1, 1, 1))]
+        else:
+            frames_object = torch.nn.functional.interpolate(
+                frames_object,
+                size=(frames[0].shape[-2], frames[0].shape[-1]),
+                mode="bilinear",
+                align_corners=False,
+            )
+            frames = [torch.cat([frames[0], frames_object], dim=0)]
+        '''
         return frames, label, index, {}
 
     def _aug_frame(self, frames, spatial_sample_index, min_scale, max_scale, crop_size,):
@@ -283,7 +314,7 @@ if __name__ == '__main__':
     from slowfast.utils.parser import load_config, parse_args
     from slowfast.config.defaults import assert_and_infer_cfg
     args = parse_args()
-    args.cfg_file = '/home/dyh/CV_project/SlowFast/dyh/MVIT_B_16x4_CONV.yaml'
+    args.cfg_file = '/home/sugar/workspace/slowfast/configs/Virat/X3D_M.yaml'
     cfg = load_config(args)
     cfg = assert_and_infer_cfg(cfg)
     dataset = Virat(
@@ -292,8 +323,8 @@ if __name__ == '__main__':
         box_mode='clip',
         min_len=8,
         dict_class_id={
-            'person_sits': 20,
-            'person_stands': 21,
+            'person_rides_bicycle': 17,
+            'person_sets_down_object': 19,
         }
     )
     dataloader = DataLoader(
@@ -302,4 +333,4 @@ if __name__ == '__main__':
         shuffle=False,
     )
     for i, (frames, label, idx, _) in enumerate(dataloader):
-        print('{}/{}'.format(i + 1, len(dataset)), frames[0].size(), label.size(), idx)
+        print('{}/{}'.format(i + 1, len(dataset)), frames[0].size(), label, idx)

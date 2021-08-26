@@ -24,7 +24,11 @@ class BCE_VIRAT(nn.Module):
             mask = y > self.hard_thres
             y[mask] = 1.
             y[~mask] = 0.
+        # weight = torch.tensor([2.0869271159324994, 1.0968095583318394, 4.667857504911766, 1.6595608352187452, 3.6011781840303687, 2.6403159830224547, 4.869071729774468], device=x.device)
+        # pos_weight = torch.tensor([1.954460531501126, 0.6904418649003278, 4.658420747351811, 1.4485650738429943, 3.5735073030418634, 2.5663047647752473, 4.861361591348501], device=x.device)
+        # _loss_fn = nn.BCEWithLogitsLoss(reduction="mean", weight=weight, pos_weight=pos_weight)
         loss = self._loss_fn(x, y)
+        # loss = _loss_fn(x, y)
         return loss
 
 if __name__ == '__main__':

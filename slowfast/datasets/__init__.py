@@ -8,6 +8,7 @@ from .imagenet import Imagenet  # noqa
 from .kinetics import Kinetics  # noqa
 from .ssv2 import Ssv2  # noqa
 from .virat import Virat
+from .virat_utils import dict_class_id
 try:
     from .ptv_datasets import Ptvcharades, Ptvkinetics, Ptvssv2  # noqa
 except Exception:
