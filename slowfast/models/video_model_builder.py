@@ -759,18 +759,43 @@ class X3D(nn.Module):
         # self.s33 = copy.deepcopy(self.s3)
         # self.s44 = copy.deepcopy(self.s4)
         # self.s55 = copy.deepcopy(self.s5)
+        # 额外mask分支
+        self.extra_mask = nn.Sequential(
+            nn.Conv3d(192, 96, kernel_size=(3, 3, 3), padding=(1, 1, 1), stride=(1, 1, 1)),
+            nn.BatchNorm3d(96),
+            nn.ReLU(inplace=True),
+            nn.Upsample(size=(8, 14, 14), mode='trilinear'),
+
+            nn.Conv3d(96, 48, kernel_size=(3, 3, 3), padding=(1, 1, 1), stride=(1, 1, 1)),
+            nn.BatchNorm3d(48),
+            nn.ReLU(inplace=True),
+            nn.Upsample(size=(8, 28, 28), mode='trilinear'),
+
+            nn.Conv3d(48, 24, kernel_size=(3, 3, 3), padding=(1, 1, 1), stride=(1, 1, 1)),
+            nn.BatchNorm3d(24),
+            nn.ReLU(inplace=True),
+            nn.Upsample(size=(8, 56, 56), mode='trilinear'),
+
+            nn.Conv3d(24, 2, kernel_size=(3, 3, 3), padding=(1, 1, 1), stride=(1, 1, 1)),
+        )
+
 
     def forward(self, x, bboxes=None):
-        for module in self.children():
-            x = module(x)
+        # for module in self.children():
+        #     x = module(x)
         # x, x1 = x[0].chunk(2,1)
         # x = [x]
         # x1 = [x1]
-        # x = self.s1(x)
-        # x = self.s2(x)
-        # x = self.s3(x)
-        # x = self.s4(x)
-        # x = self.s5(x)
+
+        # x-->[[16, 3, 8, 224, 224], ...]
+        x = self.s1(x) # x--> [[16, 24, 8, 112, 112]]
+        x = self.s2(x) # x--> [[16, 24, 8, 56, 56]]
+        x = self.s3(x) # x--> [[16, 48, 8, 28, 28]]
+        x = self.s4(x) # x--> [[16, 96, 8, 14, 14]]
+        x = self.s5(x) # x--> [[16, 192, 8, 7, 7]]
+        if self.training:
+            pred_mask = self.extra_mask(x[0])
+        x, x_reg = self.head(x)
 
         # x1 = self.s1(x1)
         # x1 = self.s2(x1)
@@ -780,8 +805,174 @@ class X3D(nn.Module):
 
         # x = [torch.cat([x[0], x1[0]], dim=2)]
         # x = self.head(x)
-        return x
+        if self.training:
+            return (x, x_reg, pred_mask)
+        return (x, x_reg)
 
+@MODEL_REGISTRY.register()
+class X3DBBN(nn.Module):
+    """
+    X3D model builder. It builds a X3D network backbone, which is a ResNet.
+
+    Christoph Feichtenhofer.
+    "X3D: Expanding Architectures for Efficient Video Recognition."
+    https://arxiv.org/abs/2004.04730
+    """
+
+    def __init__(self, cfg):
+        """
+        The `__init__` method of any subclass should also contain these
+            arguments.
+
+        Args:
+            cfg (CfgNode): model building configs, details are in the
+                comments of the config file.
+        """
+        super(X3DBBN, self).__init__()
+        self.norm_module = get_norm(cfg)
+        self.enable_detection = cfg.DETECTION.ENABLE
+        self.num_pathways = 1
+
+        exp_stage = 2.0
+        self.dim_c1 = cfg.X3DBBN.DIM_C1
+
+        self.dim_res2 = (
+            round_width(self.dim_c1, exp_stage, divisor=8)
+            if cfg.X3DBBN.SCALE_RES2
+            else self.dim_c1
+        )
+        self.dim_res3 = round_width(self.dim_res2, exp_stage, divisor=8)
+        self.dim_res4 = round_width(self.dim_res3, exp_stage, divisor=8)
+        self.dim_res5 = round_width(self.dim_res4, exp_stage, divisor=8)
+
+        self.block_basis = [
+            # blocks, c, stride
+            [1, self.dim_res2, 2],
+            [2, self.dim_res3, 2],
+            [5, self.dim_res4, 2],
+            [3, self.dim_res5, 2],
+        ]
+        self._construct_network(cfg)
+        init_helper.init_weights(
+            self, cfg.MODEL.FC_INIT_STD, cfg.RESNET.ZERO_INIT_FINAL_BN
+        )
+
+    def _round_repeats(self, repeats, multiplier):
+        """Round number of layers based on depth multiplier."""
+        multiplier = multiplier
+        if not multiplier:
+            return repeats
+        return int(math.ceil(multiplier * repeats))
+
+    def _construct_network(self, cfg):
+        """
+        Builds a single pathway X3D model.
+
+        Args:
+            cfg (CfgNode): model building configs, details are in the
+                comments of the config file.
+        """
+        assert cfg.MODEL.ARCH in _POOL1.keys()
+        assert cfg.RESNET.DEPTH in _MODEL_STAGE_DEPTH.keys()
+
+        (d2, d3, d4, d5) = _MODEL_STAGE_DEPTH[cfg.RESNET.DEPTH]
+
+        num_groups = cfg.RESNET.NUM_GROUPS
+        width_per_group = cfg.RESNET.WIDTH_PER_GROUP
+        dim_inner = num_groups * width_per_group
+
+        w_mul = cfg.X3DBBN.WIDTH_FACTOR
+        d_mul = cfg.X3DBBN.DEPTH_FACTOR
+        dim_res1 = round_width(self.dim_c1, w_mul)
+
+        temp_kernel = _TEMPORAL_KERNEL_BASIS[cfg.MODEL.ARCH]
+
+        self.s1 = stem_helper.VideoModelStem(
+            dim_in=cfg.DATA.INPUT_CHANNEL_NUM,
+            dim_out=[dim_res1],
+            kernel=[temp_kernel[0][0] + [3, 3]],
+            stride=[[1, 2, 2]],
+            padding=[[temp_kernel[0][0][0] // 2, 1, 1]],
+            norm_module=self.norm_module,
+            stem_func_name="x3d_stem",
+        )
+
+        # blob_in = s1
+        dim_in = dim_res1
+        for stage, block in enumerate(self.block_basis):
+            dim_out = round_width(block[1], w_mul)
+            dim_inner = int(cfg.X3DBBN.BOTTLENECK_FACTOR * dim_out)
+
+            n_rep = self._round_repeats(block[0], d_mul)
+            prefix = "s{}".format(
+                stage + 2
+            )  # start w res2 to follow convention
+
+            s = resnet_helper.ResStage(
+                dim_in=[dim_in],
+                dim_out=[dim_out],
+                dim_inner=[dim_inner],
+                temp_kernel_sizes=temp_kernel[1],
+                stride=[block[2]],
+                num_blocks=[n_rep],
+                num_groups=[dim_inner]
+                if cfg.X3DBBN.CHANNELWISE_3x3x3
+                else [num_groups],
+                num_block_temp_kernel=[n_rep],
+                nonlocal_inds=cfg.NONLOCAL.LOCATION[0],
+                nonlocal_group=cfg.NONLOCAL.GROUP[0],
+                nonlocal_pool=cfg.NONLOCAL.POOL[0],
+                instantiation=cfg.NONLOCAL.INSTANTIATION,
+                trans_func_name=cfg.RESNET.TRANS_FUNC,
+                stride_1x1=cfg.RESNET.STRIDE_1X1,
+                norm_module=self.norm_module,
+                dilation=cfg.RESNET.SPATIAL_DILATIONS[stage],
+                drop_connect_rate=cfg.MODEL.DROPCONNECT_RATE
+                * (stage + 2)
+                / (len(self.block_basis) + 1),
+            )
+            dim_in = dim_out
+            self.add_module(prefix, s)
+
+        if self.enable_detection:
+            NotImplementedError
+        else:
+            spat_sz = int(math.ceil(cfg.DATA.TRAIN_CROP_SIZE / 32.0))
+            self.head = head_helper.X3DBBNHead(
+                dim_in=dim_out,
+                dim_inner=dim_inner,
+                dim_out=cfg.X3DBBN.DIM_C5,
+                num_classes=cfg.MODEL.NUM_CLASSES,
+                # pool_size=[cfg.DATA.NUM_FRAMES * 2, spat_sz, spat_sz],
+                pool_size=[cfg.DATA.NUM_FRAMES, spat_sz, spat_sz],
+                dropout_rate=cfg.MODEL.DROPOUT_RATE,
+                act_func=cfg.MODEL.HEAD_ACT,
+                bn_lin5_on=cfg.X3DBBN.BN_LIN5,
+            )
+
+
+    def forward(self, x, x_sample=None, l=None, bboxes=None):
+
+
+        # x-->[[16, 3, 8, 224, 224], ...]
+        x = self.s1(x) # x--> [[16, 24, 8, 112, 112]]
+        x = self.s2(x) # x--> [[16, 24, 8, 56, 56]]
+        x = self.s3(x) # x--> [[16, 48, 8, 28, 28]]
+        x = self.s4(x) # x--> [[16, 96, 8, 14, 14]]
+        x = self.s5(x) # x--> [[16, 192, 8, 7, 7]]
+
+        x_sample = self.s1(x_sample)
+        x_sample = self.s2(x_sample)
+        x_sample = self.s3(x_sample)
+        x_sample = self.s4(x_sample)
+        x_sample = self.s5(x_sample)
+
+
+        x = self.head(x, x_sample, l)
+
+        if self.training:
+            return x
+        return (x, {})
 
 @MODEL_REGISTRY.register()
 class MViT(nn.Module):

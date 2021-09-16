@@ -25,6 +25,15 @@ from slowfast.utils.multigrid import MultigridSchedule
 
 logger = logging.get_logger(__name__)
 
+def smooth_l1_loss(pred, target, beta=1.0):
+    diff = torch.abs(pred - target)
+    loss = torch.where(diff < beta, 0.5 * diff * diff / beta,
+                       diff - 0.5 * beta)
+    loss = torch.sum(loss)
+    return loss
+
+def bbn_mix(model, images, images_sample):
+    pass
 
 def train_epoch(
     train_loader, model, optimizer, scaler, train_meter, cur_epoch, cfg, writer=None
@@ -58,7 +67,8 @@ def train_epoch(
             num_classes=cfg.MODEL.NUM_CLASSES,
         )
 
-    for cur_iter, (inputs, labels, _, meta) in enumerate(train_loader):
+    l = 1 - ((cur_epoch - 1) / cfg.SOLVER.MAX_EPOCH) ** 2
+    for cur_iter, (inputs, inputs_sample, labels, labels_sample, _, meta, reg_labels, masks) in enumerate(train_loader):
         # Transfer the data to the current GPU device.
         if cfg.NUM_GPUS:
             if isinstance(inputs, (list,)):
@@ -66,7 +76,23 @@ def train_epoch(
                     inputs[i] = inputs[i].cuda(non_blocking=True)
             else:
                 inputs = inputs.cuda(non_blocking=True)
+            # 增加采样分支
+            if inputs_sample != {}:
+                if isinstance(inputs_sample, (list,)):
+                    for i in range(len(inputs_sample)):
+                        inputs_sample[i] = inputs_sample[i].cuda(non_blocking=True)
+                else:
+                    inputs_sample = inputs_sample.cuda(non_blocking=True)
+                labels_sample = labels_sample.cuda()
+            # 增加mask分支
+            if masks != {}:
+                if isinstance(masks, (list,)):
+                    for i in range(len(masks)):
+                        masks[i] = masks[i].cuda(non_blocking=True)
+                else:
+                    masks = masks.cuda(non_blocking=True)
             labels = labels.cuda()
+            # reg_labels = reg_labels.cuda()
             for key, val in meta.items():
                 if isinstance(val, (list,)):
                     for i in range(len(val)):
@@ -87,13 +113,25 @@ def train_epoch(
             if cfg.DETECTION.ENABLE:
                 preds = model(inputs, meta["boxes"])
             else:
-                preds = model(inputs)
+                if inputs_sample != {}:
+                    preds = model(inputs, inputs_sample, l)
+                    preds_mask = {}
+                else:
+                    preds, preds_reg, preds_mask = model(inputs, masks)
             # Explicitly declare reduction to mean.
             # loss_fun = losses.get_loss_func(cfg.MODEL.LOSS_FUNC)(reduction="mean")
             loss_fun = losses_virat.BCE_VIRAT()
 
             # Compute the loss.
-            loss = loss_fun(preds, labels)
+            if inputs_sample != {}:
+                loss = l * loss_fun(preds, labels) + (1-l) * loss_fun(preds, labels_sample)
+            else:
+                loss = loss_fun(preds, labels)
+            if preds_mask != {}:
+                loss_mask = torch.nn.MSELoss()(preds_mask, masks[0])
+                misc.check_nan_losses(loss_mask)
+                loss = loss + 0.1 * loss_mask
+            # loss_bbox = smooth_l1_loss(preds_reg, reg_labels)
 
         # check Nan Loss.
         misc.check_nan_losses(loss)
@@ -254,7 +292,7 @@ def eval_epoch(val_loader, model, val_meter, cur_epoch, cfg, writer=None):
             val_meter.update_stats(preds, ori_boxes, metadata)
 
         else:
-            preds = model(inputs)
+            preds, _ = model(inputs)
 
             if cfg.DATA.MULTI_LABEL:
                 if cfg.NUM_GPUS > 1:

@@ -52,7 +52,8 @@ def get_frames(clip_info, num_frames, clip_idx):
     num_missing = num_frames - len(list_frames)  # 考虑部分图像路径不存在，需进行补充
     list_frames += [list_frames[-1]] * num_missing
     '''裁剪图像'''
-    bbox = clip_info['box']
+    bbox = clip_info['box'] # 事件大框
+    person_object_bbox = clip_info['smallbox'] # 事件小框
     if isinstance(bbox[0], list):  # 逐帧框
         list_fid = list(range(f_start, f_stop + 1))
         width = np.mean([b[2] - b[0] for b in bbox], dtype=int)
@@ -65,12 +66,147 @@ def get_frames(clip_info, num_frames, clip_idx):
     else:  # clip大框
         x1, y1, x2, y2 = list(map(int, bbox))
         list_frames = [f[:, y1:y2, x1:x2] for f in list_frames]  # 裁剪
+        if person_object_bbox is not None:
+            list_fid = list(range(f_start, f_stop + 1))
+            # 初始化各种list
+            person_masks = []
+            object_masks = []
+            list_person_mask = []
+            list_object_mask = []
+            # 将person与car的框分开，并将坐标统一到截图的坐标系中
+            # person_mask = torch.zeros([1, y2-y1, x2-x1])
+            # object_mask = torch.zeros([1, y2-y1, x2-x1])
+            for ii,person_object in enumerate(person_object_bbox):
+                # person_mask = torch.zeros([1, y2-y1, x2-x1])
+                # object_mask = torch.zeros([1, y2-y1, x2-x1])
+                person_mask = torch.zeros([y2-y1, x2-x1])
+                object_mask = torch.zeros([y2-y1, x2-x1])
+                for box in person_object:
+                    if box[4] != 'person':
+                        object_box, object_mask = Relocation_gaussian(object_mask,bbox,box[:4])
+                    else:
+                        person_box, person_mask = Relocation_gaussian(person_mask,bbox,box[:4])
+                person_masks.append(person_mask.unsqueeze(0))
+                object_masks.append(object_mask.unsqueeze(0))
+                # person_masks.append(person_mask)
+                # object_masks.append(object_mask)
+
+            for i, fid in enumerate(f_sampled):
+                idx_box = list_fid.index(fid)
+
+                # 取mask
+                list_person_mask.append(person_masks[idx_box])
+                list_object_mask.append(object_masks[idx_box])
+
+    #组合
     frames = torch.stack(list_frames)  # 拼接,[T,C,H,W]
     frames = frames.permute(0, 2, 3, 1)  # [T,C,H,W]→[T,H,W,C]
-    return frames
+    if person_object_bbox is not None:
+        person_masks = torch.stack(list_person_mask)    #[T,C,H,W]
+        object_masks = torch.stack(list_object_mask)
+        masks = torch.cat((person_masks,object_masks),dim=1) #[T,C,H,W] Channel#0为person， Channel#1为car
+        # masks = torch.cat((person_mask,object_mask),dim=0) #[T,C,H,W] Channel#0为person， Channel#1为car
+        # masks = masks.unsqueeze(0)
+        masks = masks.permute(0,2,3,1)
+        return frames, masks
+    return frames, None
+
+def Relocation(mask, clip_bbox, object_bbox):
+    clip_x1,clip_y1,clip_x2,clip_y2 = clip_bbox
+    object_x1,object_y1,object_x2,object_y2 = object_bbox
+    object_x1 = max(0,int(object_x1 - clip_x1))
+    object_y1 = max(0,int(object_y1 - clip_y1))
+    object_x2 = max(0,int(object_x2 - clip_x1))
+    object_y2 = max(0,int(object_y2 - clip_y1))
+    relocation_bbox = [object_x1,object_y1,object_x2,object_y2]
+
+    #generate position mask
+    # mask = torch.zeros([1, clip_y2-clip_y1, clip_x2-clip_x1])
+    mask[:,object_y1:object_y2,object_x1:object_x2] = 1
+    return relocation_bbox,mask
+
+def Relocation_gaussian(mask, clip_bbox, object_bbox):
+    clip_x1,clip_y1,clip_x2,clip_y2 = clip_bbox
+    object_x1,object_y1,object_x2,object_y2 = object_bbox
+    object_x1 = max(0,int(object_x1 - clip_x1))
+    object_y1 = max(0,int(object_y1 - clip_y1))
+    object_x2 = max(0,int(object_x2 - clip_x1))
+    object_y2 = max(0,int(object_y2 - clip_y1))
+
+    cen = ((object_x1 + object_x2) / 2, (object_y1 + object_y2) / 2)
+    w = object_x2 - object_x1
+    h = object_y2 - object_y1
+    mask = gen_gaussian_target(mask, cen, w/2, h/2)
+    return None, mask
+
+def gaussian2D(radius_x, radius_y, sigma_x=1, sigma_y=1, dtype=torch.float32, device='cpu'):
+    """Generate 2D gaussian kernel.
+
+    Args:
+        radius (int): Radius of gaussian kernel.
+        sigma (int): Sigma of gaussian function. Default: 1.
+        dtype (torch.dtype): Dtype of gaussian tensor. Default: torch.float32.
+        device (str): Device of gaussian tensor. Default: 'cpu'.
+
+    Returns:
+        h (Tensor): Gaussian kernel with a
+            ``(2 * radius + 1) * (2 * radius + 1)`` shape.
+    """
+    x = torch.arange(
+        -radius_x, radius_x + 1, dtype=dtype, device=device).view(1, -1)
+    y = torch.arange(
+        -radius_y, radius_y + 1, dtype=dtype, device=device).view(-1, 1)
+
+    # h = (-(x * x + y * y) / (2 * sigma_x * sigma_y)).exp()
+    h = (-((x * x / (2 * sigma_x * sigma_x)) + (y * y / (2 * sigma_y * sigma_y)))).exp()
+
+    h[h < torch.finfo(h.dtype).eps * h.max()] = 0
+    return h
+
+
+def gen_gaussian_target(heatmap, center, radius_x, radius_y, k=1):
+    """Generate 2D gaussian heatmap.
+
+    Args:
+        heatmap (Tensor): Input heatmap, the gaussian kernel will cover on
+            it and maintain the max value.
+        center (list[int]): Coord of gaussian kernel's center.
+        radius (int): Radius of gaussian kernel.
+        k (int): Coefficient of gaussian kernel. Default: 1.
+
+    Returns:
+        out_heatmap (Tensor): Updated heatmap covered by gaussian kernel.
+    """
+    radius_x = int(radius_x)
+    radius_y = int(radius_y)
+    diameter_x = 2 * radius_x + 1
+    diameter_y = 2 * radius_y + 1
+
+    gaussian_kernel = gaussian2D(
+        radius_x, radius_y, sigma_x=diameter_x / 6, sigma_y=diameter_y / 6, dtype=heatmap.dtype, device=heatmap.device)
+
+    x, y = center
+    x = int(x)
+    y = int(y)
+
+    height, width = heatmap.shape[:2]
+
+    left, right = min(x, radius_x), min(width - x, radius_x + 1)
+    top, bottom = min(y, radius_y), min(height - y, radius_y + 1)
+
+    masked_heatmap = heatmap[y - top:y + bottom, x - left:x + right]
+    masked_gaussian = gaussian_kernel[radius_y - top:radius_y + bottom,
+                                      radius_x - left:radius_x + right]
+    out_heatmap = heatmap
+    torch.max(
+        masked_heatmap,
+        masked_gaussian * k,
+        out=out_heatmap[y - top:y + bottom, x - left:x + right])
+
+    return out_heatmap
 
 @DATASET_REGISTRY.register()
-class Virat(Dataset):
+class Viratmask(Dataset):
     def __init__(
             self,
             cfg,
@@ -123,7 +259,7 @@ class Virat(Dataset):
         if name == 'train':
             path_to_file = join(self.cfg.DATA.PATH_TO_DATA_DIR, '{}_clip_duration32_stride16_addbg_randomhalf.json'.format(name))
         else:
-            path_to_file = join(self.cfg.DATA.PATH_TO_DATA_DIR, '{}_clip_duration32_stride16_det.json'.format(name))
+            path_to_file = join(self.cfg.DATA.PATH_TO_DATA_DIR, '{}_clip_duration32_stride16.json'.format(name))
         # path_to_file = join(self.cfg.DATA.PATH_TO_DATA_DIR, 'tmp.json')
         annotation = json.load(open(path_to_file, 'r'))
         self._clip_info = list()
@@ -147,6 +283,10 @@ class Virat(Dataset):
                         else [x['big'] for x in dict_anno['bbox_frame'].values()],  # clip框或逐帧框
                     # 'box_object': list(map(lambda x :x[0]-x[1] ,zip(dict_anno['bbox_prop'],[x1, y1, x1, y1])))
                 }  # 帧信息
+                if name == 'train':
+                    clip_info['smallbox'] = [x['small'] for x in dict_anno["bbox_frame"].values()]
+                else:
+                    clip_info['smallbox'] = None
                 label = {self._dict_class_id[k]: dict_anno_label[k] if k in dict_anno_label else 0. for k in self._dict_class_id}  # 标签，例：{0:1.0, 1:0.2, ...}
                 label = torch.tensor([label[k] for k in sorted(label)], dtype=torch.float64)
                 '''遍历所有clip(考虑VIEWS和CROPS)'''
@@ -207,7 +347,7 @@ class Virat(Dataset):
                 if self.cfg.TEST.NUM_SPATIAL_CROPS > 1 \
                 else [self.cfg.DATA.TRAIN_JITTER_SCALES[0]] * 2 + [self.cfg.DATA.TEST_CROP_SIZE]
         '''输入帧读取'''
-        frames = get_frames(
+        frames, masks = get_frames(
             clip_info=self._clip_info[index],
             num_frames=self.cfg.DATA.NUM_FRAMES,
             clip_idx=temporal_sample_index,
@@ -231,53 +371,40 @@ class Virat(Dataset):
         else:
             frames = tensor_normalize(frames, self.cfg.DATA.MEAN, self.cfg.DATA.STD)
             frames = frames.permute(3, 0, 1, 2)  # [T,H,W,C]→[C,T,H,W]
-            # boxes = np.array([self._clip_info[index]['box_object']])
-            frames = spatial_sampling(
-                frames,
-                # boxes,
-                spatial_idx=spatial_sample_index,
-                min_scale=min_scale,
-                max_scale=max_scale,
-                crop_size=crop_size,
-                random_horizontal_flip=self.cfg.DATA.RANDOM_FLIP,
-                inverse_uniform_sampling=self.cfg.DATA.INV_UNIFORM_SAMPLE,
-            )
+            if masks is not None:
+                masks = masks.permute(3, 0, 1, 2)
+
+                # boxes = np.array([self._clip_info[index]['box_object']])
+                frames, masks = spatial_sampling_mask(
+                    frames,
+                    masks,
+                    # boxes,
+                    spatial_idx=spatial_sample_index,
+                    min_scale=min_scale,
+                    max_scale=max_scale,
+                    crop_size=crop_size,
+                    random_horizontal_flip=self.cfg.DATA.RANDOM_FLIP,
+                    inverse_uniform_sampling=self.cfg.DATA.INV_UNIFORM_SAMPLE,
+                )
+            else:
+                frames = spatial_sampling(
+                    frames,
+                    # boxes,
+                    spatial_idx=spatial_sample_index,
+                    min_scale=min_scale,
+                    max_scale=max_scale,
+                    crop_size=crop_size,
+                    random_horizontal_flip=self.cfg.DATA.RANDOM_FLIP,
+                    inverse_uniform_sampling=self.cfg.DATA.INV_UNIFORM_SAMPLE,
+                )
         label = self._labels[index]
-        # if self.mode == 'train':
-        #     if np.random.uniform() < 0.5 and (label[3] or label[4]):
-        #         frames = torch.flip(frames, dims=[1])
-        #         tmp = copy.deepcopy(label[3])
-        #         label[3] = label[4]
-        #         label[4] = tmp
-        # if self._clip_info[index]['inverse']:
-        #     tmp = copy.deepcopy(label[3])
-        #     label[3] = label[4]
-        #     label[4] = tmp
+        
         frames = pack_pathway_output(self.cfg, frames)
-        '''
-        height, width = frames[0].shape[-2:]
-        x1, y1, x2, y2 = boxes[0]
-        x1 = max(0, x1)
-        y1 = max(0, y1)
-        x2 = min(width, x2)
-        y2 = min(height, y2)
-        reg_label = torch.tensor([x1/width, y1/height, x2/width, y2/height])
-        '''
         reg_label = {}
-        # frames_object = frames[0][:, :, int(y1):int(y2), int(x1):int(x2)]
-        # if frames_object.shape[-2] == 0 or frames_object.shape[-1] == 0:
-        #     # frames_object = frames
-        #     frames = [frames[0].repeat((2, 1, 1, 1))]
-        # else:
-        #     frames_object = torch.nn.functional.interpolate(
-        #         frames_object,
-        #         size=(frames[0].shape[-2], frames[0].shape[-1]),
-        #         mode="bilinear",
-        #         align_corners=False,
-        #     )
-        #     frames = [torch.cat([frames[0], frames_object], dim=0)]
         if self.mode == 'train':
-            return frames, label, index, {}, reg_label
+            masks = masks.resize_(masks.shape[0], masks.shape[1], masks.shape[2]//4, masks.shape[3]//4)
+            masks = pack_pathway_output(self.cfg, masks)
+            return frames, {}, label, {}, index, {}, reg_label, masks
         else:
             return frames, label, index, {}
 
@@ -337,6 +464,195 @@ class Virat(Dataset):
     def num_videos(self):
         return len(self._labels)
 
+def spatial_sampling_mask(
+    frames, masks,
+    spatial_idx=-1,
+    min_scale=256,
+    max_scale=320,
+    crop_size=224,
+    random_horizontal_flip=True,
+    inverse_uniform_sampling=False,
+    aspect_ratio=None,
+    scale=None,
+    motion_shift=False,
+):
+    from . import transform as transform
+    assert spatial_idx in [-1, 0, 1, 2]
+    if spatial_idx == -1:
+        assert aspect_ratio is None
+        assert scale is None
+        if aspect_ratio is None and scale is None:
+            frames, _ , masks= random_short_side_scale_jitter_gcn(
+                images=frames,
+                masks=masks,
+                min_size=min_scale,
+                max_size=max_scale,
+                inverse_uniform_sampling=inverse_uniform_sampling,
+            )
+            frames, masks = random_crop_gcn(frames, masks, crop_size)
+        else:
+            # not supported yet
+            transform_func = (
+                transform.random_resized_crop_with_shift
+                if motion_shift
+                else transform.random_resized_crop
+            )
+            frames = transform_func(
+                images=frames,
+                target_height=crop_size,
+                target_width=crop_size,
+                scale=scale,
+                ratio=aspect_ratio,
+            )
+        if random_horizontal_flip:
+            frames, _, masks = horizontal_flip_gcn(0.5, frames, masks)
+    else:
+        # The testing is deterministic and no jitter should be performed.
+        # min_scale, max_scale, and crop_size are expect to be the same.
+        assert len({min_scale, max_scale}) == 1
+        frames, _ = transform.random_short_side_scale_jitter(
+            frames, min_scale, max_scale
+        )
+        frames, _ = transform.uniform_crop(frames, crop_size, spatial_idx)
+
+    return frames, masks
+
+def horizontal_flip_gcn(prob, images, masks,boxes=None):
+    if boxes is None:
+        flipped_boxes = None
+    else:
+        flipped_boxes = boxes.copy()
+
+    if np.random.uniform() < prob:
+        images = images.flip((-1))
+        masks =  masks.flip((-1))
+
+        if len(images.shape) == 3:
+            width = images.shape[2]
+        elif len(images.shape) == 4:
+            width = images.shape[3]
+        else:
+            raise NotImplementedError("Dimension does not supported")
+        if boxes is not None:
+            flipped_boxes[:, [0, 2]] = width - boxes[:, [2, 0]] - 1
+
+    return images, flipped_boxes, masks
+
+def random_short_side_scale_jitter_gcn(images, masks, min_size, max_size, boxes=None, inverse_uniform_sampling=False):
+    import math
+    if inverse_uniform_sampling:
+        size = int(
+            round(1.0 / np.random.uniform(1.0 / max_size, 1.0 / min_size))
+        )
+    else:
+        size = int(round(np.random.uniform(min_size, max_size)))
+
+    height = images.shape[2]
+    width = images.shape[3]
+    if (width <= height and width == size) or (
+        height <= width and height == size
+    ):
+        return images, boxes, masks
+    new_width = size
+    new_height = size
+    if width < height:
+        new_height = int(math.floor((float(height) / width) * size))
+        if boxes is not None:
+            boxes = boxes * float(new_height) / height
+    else:
+        new_width = int(math.floor((float(width) / height) * size))
+        if boxes is not None:
+            boxes = boxes * float(new_width) / width
+
+    return (
+        torch.nn.functional.interpolate(
+            images,
+            size=(new_height, new_width),
+            mode="bilinear",
+            align_corners=False,
+        ),
+        boxes,
+        torch.nn.functional.interpolate(
+            masks,
+            size=(new_height, new_width),
+            mode="bilinear",
+            align_corners=False,
+        ),
+    )
+
+def uniform_crop_gcn(images, masks, size, spatial_idx, boxes=None, scale_size=None):
+    import math
+    assert spatial_idx in [0, 1, 2]
+    ndim = len(images.shape)
+    if ndim == 3:
+        images = images.unsqueeze(0)
+    height = images.shape[2]
+    width = images.shape[3]
+    if scale_size is not None:
+        if width <= height:
+            width, height = scale_size, int(height / width * scale_size)
+        else:
+            width, height = int(width / height * scale_size), scale_size
+        images = torch.nn.functional.interpolate(
+            images,
+            size=(height, width),
+            mode="bilinear",
+            align_corners=False,
+        )
+    y_offset = int(math.ceil((height - size) / 2))
+    x_offset = int(math.ceil((width - size) / 2))
+    if height > width:
+        if spatial_idx == 0:
+            y_offset = 0
+        elif spatial_idx == 2:
+            y_offset = height - size
+    else:
+        if spatial_idx == 0:
+            x_offset = 0
+        elif spatial_idx == 2:
+            x_offset = width - size
+    cropped = images[:, :, y_offset : y_offset + size, x_offset : x_offset + size]
+    cropped_mask = masks[:, :, y_offset : y_offset + size, x_offset : x_offset + size]
+    
+    new_person_bbox = []
+    for person_box in person_bbox:
+        x1,y1,x2,y2 = person_box
+        x1 = x1 - x_offset
+        y1 = y1 - x_offset
+        x2 = x2 - x_offset
+        y2 = y2 - x_offset
+        person_box = [x1,y1,x2,y2]
+        new_person_bbox.append(person_box)
+
+    new_car_bbox = []
+    for car_box in car_bbox:
+        x1,y1,x2,y2 = car_box
+        x1 = x1 - x_offset
+        y1 = y1 - x_offset
+        x2 = x2 - x_offset
+        y2 = y2 - x_offset
+        car_box = [x1,y1,x2,y2]
+        new_car_bbox.append(car_box)
+
+    if ndim == 3:
+        cropped = cropped.squeeze(0)
+    return cropped, cropped_mask, new_person_bbox, new_car_bbox
+
+def random_crop_gcn(images, masks, size):
+    if images.shape[2] == size and images.shape[3] == size:
+        return images
+    height = images.shape[2]
+    width = images.shape[3]
+    y_offset = 0
+    if height > size:
+        y_offset = int(np.random.randint(0, height - size))
+    x_offset = 0
+    if width > size:
+        x_offset = int(np.random.randint(0, width - size))
+    cropped = images[:, :, y_offset : y_offset + size, x_offset : x_offset + size]
+    cropped_masks = masks[:,:,y_offset : y_offset + size, x_offset : x_offset + size]
+
+    return cropped, cropped_masks
 if __name__ == '__main__':
     from slowfast.utils.parser import load_config, parse_args
     from slowfast.config.defaults import assert_and_infer_cfg

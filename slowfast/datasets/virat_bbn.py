@@ -70,7 +70,7 @@ def get_frames(clip_info, num_frames, clip_idx):
     return frames
 
 @DATASET_REGISTRY.register()
-class Virat(Dataset):
+class Viratbbn(Dataset):
     def __init__(
             self,
             cfg,
@@ -105,6 +105,7 @@ class Virat(Dataset):
         self._num_clips = cfg.TEST.NUM_ENSEMBLE_VIEWS * cfg.TEST.NUM_SPATIAL_CROPS if mode == 'test' else 1
         '''构建数据集'''
         logger.info("Constructing VIRAT {}...".format(mode))
+        self.cls_num = len(dict_class_id)
         self._construct_loader()
         self.aug = False
         self.rand_erase = False
@@ -112,6 +113,20 @@ class Virat(Dataset):
             self.aug = True
             if self.cfg.AUG.RE_PROB > 0:
                 self.rand_erase = True
+        
+
+    def get_weight(self, num_list):
+        max_num = max(num_list)
+        class_weight = [max_num / i for i in num_list]
+        sum_weight = sum(class_weight)
+        return class_weight, sum_weight
+    
+    def sample_class_index_by_weight(self):
+        rand_number, now_sum = random.random() * self.sum_weight, 0
+        for i in range(self.cls_num):
+            now_sum += self.class_weight[i]
+            if rand_number <= now_sum:
+                return i
 
     def _construct_loader(self):
         """
@@ -123,14 +138,16 @@ class Virat(Dataset):
         if name == 'train':
             path_to_file = join(self.cfg.DATA.PATH_TO_DATA_DIR, '{}_clip_duration32_stride16_addbg_randomhalf.json'.format(name))
         else:
-            path_to_file = join(self.cfg.DATA.PATH_TO_DATA_DIR, '{}_clip_duration32_stride16_det.json'.format(name))
+            path_to_file = join(self.cfg.DATA.PATH_TO_DATA_DIR, '{}_clip_duration32_stride16.json'.format(name))
         # path_to_file = join(self.cfg.DATA.PATH_TO_DATA_DIR, 'tmp.json')
         annotation = json.load(open(path_to_file, 'r'))
         self._clip_info = list()
         self._labels = list()
         self._spatial_temporal_idx = []
+        num_list = [0] * self.cls_num
+        self.class_dict = dict()
         '''遍历每个样本'''
-        for dict_anno in annotation:
+        for anno_i, dict_anno in enumerate(annotation):
             # root_video = join(self.cfg.DATA.PATH_PREFIX, 'train' if self.mode == 'train' else 'val_test')
             root_video = self.cfg.DATA.PATH_PREFIX
             if dict_anno['duration'] < self._min_len: continue  # 滤除过短clip
@@ -148,6 +165,12 @@ class Virat(Dataset):
                     # 'box_object': list(map(lambda x :x[0]-x[1] ,zip(dict_anno['bbox_prop'],[x1, y1, x1, y1])))
                 }  # 帧信息
                 label = {self._dict_class_id[k]: dict_anno_label[k] if k in dict_anno_label else 0. for k in self._dict_class_id}  # 标签，例：{0:1.0, 1:0.2, ...}
+                for i, k in enumerate(sorted(label)):
+                    num_list[i] += label[k]
+                    if not i in self.class_dict:
+                        self.class_dict[i] = []
+                    if label[k]:
+                        self.class_dict[i].append(anno_i)
                 label = torch.tensor([label[k] for k in sorted(label)], dtype=torch.float64)
                 '''遍历所有clip(考虑VIEWS和CROPS)'''
                 for idx in range(self._num_clips):
@@ -164,6 +187,8 @@ class Virat(Dataset):
                         self._labels.append(label)
                         self._spatial_temporal_idx.append(idx)
                 '''
+        if name == 'train':
+            self.class_weight, self.sum_weight = self.get_weight(num_list)
         assert len(self._labels) > 0
         logger.info(
             "Constructing VIRAT dataloader (size: {}) from {}".format(len(self._labels), path_to_file)
@@ -212,8 +237,17 @@ class Virat(Dataset):
             num_frames=self.cfg.DATA.NUM_FRAMES,
             clip_idx=temporal_sample_index,
         )  # tensor [T,C,H,W]
-        # if self._clip_info[index]['inverse']:
-        #     frames = torch.flip(frames, dims=[0])
+        if self.mode == 'train':
+            sample_class = self.sample_class_index_by_weight()
+            sample_indexes = self.class_dict[sample_class]
+            sample_index = random.choice(sample_indexes)
+            frames_sample = get_frames(
+                clip_info=self._clip_info[sample_index],
+                num_frames=self.cfg.DATA.NUM_FRAMES,
+                clip_idx=temporal_sample_index,
+            )
+
+
         '''输入帧处理'''
         if self.aug:
             if self.cfg.AUG.NUM_SAMPLE > 1:
@@ -231,6 +265,21 @@ class Virat(Dataset):
         else:
             frames = tensor_normalize(frames, self.cfg.DATA.MEAN, self.cfg.DATA.STD)
             frames = frames.permute(3, 0, 1, 2)  # [T,H,W,C]→[C,T,H,W]
+            if self.mode == 'train':
+                frames_sample = tensor_normalize(frames_sample, self.cfg.DATA.MEAN, self.cfg.DATA.STD)
+                frames_sample = frames_sample.permute(3, 0, 1, 2)
+
+                frames_sample = spatial_sampling(
+                    frames_sample,
+                    # boxes,
+                    spatial_idx=spatial_sample_index,
+                    min_scale=min_scale,
+                    max_scale=max_scale,
+                    crop_size=crop_size,
+                    random_horizontal_flip=self.cfg.DATA.RANDOM_FLIP,
+                    inverse_uniform_sampling=self.cfg.DATA.INV_UNIFORM_SAMPLE,
+                )
+
             # boxes = np.array([self._clip_info[index]['box_object']])
             frames = spatial_sampling(
                 frames,
@@ -242,42 +291,17 @@ class Virat(Dataset):
                 random_horizontal_flip=self.cfg.DATA.RANDOM_FLIP,
                 inverse_uniform_sampling=self.cfg.DATA.INV_UNIFORM_SAMPLE,
             )
+                
         label = self._labels[index]
-        # if self.mode == 'train':
-        #     if np.random.uniform() < 0.5 and (label[3] or label[4]):
-        #         frames = torch.flip(frames, dims=[1])
-        #         tmp = copy.deepcopy(label[3])
-        #         label[3] = label[4]
-        #         label[4] = tmp
-        # if self._clip_info[index]['inverse']:
-        #     tmp = copy.deepcopy(label[3])
-        #     label[3] = label[4]
-        #     label[4] = tmp
         frames = pack_pathway_output(self.cfg, frames)
-        '''
-        height, width = frames[0].shape[-2:]
-        x1, y1, x2, y2 = boxes[0]
-        x1 = max(0, x1)
-        y1 = max(0, y1)
-        x2 = min(width, x2)
-        y2 = min(height, y2)
-        reg_label = torch.tensor([x1/width, y1/height, x2/width, y2/height])
-        '''
-        reg_label = {}
-        # frames_object = frames[0][:, :, int(y1):int(y2), int(x1):int(x2)]
-        # if frames_object.shape[-2] == 0 or frames_object.shape[-1] == 0:
-        #     # frames_object = frames
-        #     frames = [frames[0].repeat((2, 1, 1, 1))]
-        # else:
-        #     frames_object = torch.nn.functional.interpolate(
-        #         frames_object,
-        #         size=(frames[0].shape[-2], frames[0].shape[-1]),
-        #         mode="bilinear",
-        #         align_corners=False,
-        #     )
-        #     frames = [torch.cat([frames[0], frames_object], dim=0)]
         if self.mode == 'train':
-            return frames, label, index, {}, reg_label
+            label_sample = self._labels[sample_index]
+            frames_sample = pack_pathway_output(self.cfg, frames_sample)
+        reg_label = {}
+        
+
+        if self.mode == 'train':
+            return frames, frames_sample, label, label_sample, index, {}, reg_label, {}
         else:
             return frames, label, index, {}
 

@@ -2,7 +2,7 @@ TRAIN:
   # ENABLE: False # default True
   DATASET: virat
   BATCH_SIZE: 64
-  EVAL_PERIOD: 1 #10
+  EVAL_PERIOD: 20 #10
   CHECKPOINT_PERIOD: 1 #10
   AUTO_RESUME: True
   MIXED_PRECISION: False
@@ -18,12 +18,12 @@ X3D:
 TEST:
   ENABLE: True
   DATASET: virat
-  BATCH_SIZE: 256 #64
+  BATCH_SIZE: 512 #64
   # CHECKPOINT_FILE_PATH: 'x3d_m.pyth' # 76.21% top1 30-view accuracy to download from the model zoo (optional).
   # NUM_SPATIAL_CROPS: 1
   NUM_SPATIAL_CROPS: 3
   NUM_ENSEMBLE_VIEWS: 1  # 10->1
-  SAVE_RESULTS_PATH: results.pkl
+  SAVE_RESULTS_PATH: results_val_det_acsl.pkl
 DATA:
   MULTI_LABEL: True # False
   NUM_FRAMES: 8 #16
@@ -55,7 +55,7 @@ SOLVER:
   WARMUP_START_LR: 0.01
   OPTIMIZING_METHOD: sgd
 MODEL:
-  NUM_CLASSES: 7 #400
+  NUM_CLASSES: 8 #400
   ARCH: x3d
   MODEL_NAME: X3D
   LOSS_FUNC: cross_entropy
@@ -66,16 +66,16 @@ DATA_LOADER:
   PIN_MEMORY: True
 NUM_GPUS: 4
 RNG_SEED: 0
-OUTPUT_DIR: /data/sugar/checkpoints/slowfast_work_dirs/inversion_pullpush_onlypull/
+OUTPUT_DIR: /data/sugar/checkpoints/slowfast_work_dirs/linear_sample_addbg/
 LOG_MODEL_INFO: False
-TENSORBOARD:
-  ENABLE: True
-  LOG_DIR: ''
-  CLASS_NAMES_PATH: /home/sugar/workspace/slowfast/configs/Virat/tensorboard/personobject_class2id.json
-  CONFUSION_MATRIX:
-    ENABLE: True
-    SUBSET_PATH: /home/sugar/workspace/slowfast/configs/Virat/tensorboard/personobject_classes.txt
-  HISTOGRAM:
-    ENABLE: True
-    TOPK: 7
-    SUBSET_PATH: /home/sugar/workspace/slowfast/configs/Virat/tensorboard/personobject_classes.txt
+# TENSORBOARD:
+#   ENABLE: True
+#   LOG_DIR: ''
+#   CLASS_NAMES_PATH: /home/sugar/workspace/slowfast/configs/Virat/tensorboard/personobject_class2id.json
+#   CONFUSION_MATRIX:
+#     ENABLE: True
+#     SUBSET_PATH: /home/sugar/workspace/slowfast/configs/Virat/tensorboard/personobject_classes.txt
+#   HISTOGRAM:
+#     ENABLE: True
+#     TOPK: 7
+#     SUBSET_PATH: /home/sugar/workspace/slowfast/configs/Virat/tensorboard/personobject_classes.txt

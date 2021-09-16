@@ -23,15 +23,14 @@ TEST:
   # NUM_SPATIAL_CROPS: 1
   NUM_SPATIAL_CROPS: 3
   NUM_ENSEMBLE_VIEWS: 1  # 10->1
-  SAVE_RESULTS_PATH: results.pkl
 DATA:
   MULTI_LABEL: True # False
   NUM_FRAMES: 8 #16
   SAMPLING_RATE: 5
-  TRAIN_JITTER_SCALES: [256, 320]
-  TRAIN_CROP_SIZE: 224
-  # TEST_CROP_SIZE: 224 # use if TEST.NUM_SPATIAL_CROPS: 1
-  TEST_CROP_SIZE: 256 # use if TEST.NUM_SPATIAL_CROPS: 3
+  TRAIN_JITTER_SCALES: [356, 446]
+  TRAIN_CROP_SIZE: 312
+  # TEST_CROP_SIZE: 312 # use if TEST.NUM_SPATIAL_CROPS: 1
+  TEST_CROP_SIZE: 356 # use if TEST.NUM_SPATIAL_CROPS: 3
   INPUT_CHANNEL_NUM: [3]
   DECODING_BACKEND: torchvision
   PATH_TO_DATA_DIR: /data/actev_data/clip_json
@@ -42,7 +41,7 @@ RESNET:
   TRANS_FUNC: x3d_transform
   STRIDE_1X1: False
 BN:
-  USE_PRECISE_STATS: False
+  USE_PRECISE_STATS: True
   NUM_BATCHES_PRECISE: 200
   WEIGHT_DECAY: 0.0
 SOLVER:
@@ -60,14 +59,12 @@ MODEL:
   MODEL_NAME: X3D
   LOSS_FUNC: cross_entropy
   DROPOUT_RATE: 0.5
-  # HEAD_ACT: sigmoid # softmax
 DATA_LOADER:
   NUM_WORKERS: 1
   PIN_MEMORY: True
 NUM_GPUS: 4
 RNG_SEED: 0
-OUTPUT_DIR: /data/sugar/checkpoints/slowfast_work_dirs/inversion_pullpush_onlypull/
-LOG_MODEL_INFO: False
+OUTPUT_DIR: /data/sugar/checkpoints/slowfast_work_dirs/scale312
 TENSORBOARD:
   ENABLE: True
   LOG_DIR: ''

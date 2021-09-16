@@ -5,3 +5,4 @@ person_pulls_object
 person_pushs_object
 person_rides_bicycle
 person_sets_down_object
+person

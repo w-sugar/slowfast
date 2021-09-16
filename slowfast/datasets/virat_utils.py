@@ -13,4 +13,10 @@ dict_class_id = {
     'person_pushs_object': 16,
     'person_rides_bicycle': 17,
     'person_sets_down_object': 19,
+    'person': 36
 }
+
+# dict_class_id = {
+#     'person_person_interaction': 13,
+#     'person_talks_to_person': 23,
+# }

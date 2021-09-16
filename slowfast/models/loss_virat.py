@@ -18,6 +18,7 @@ class BCE_VIRAT(nn.Module):
         super(BCE_VIRAT, self).__init__()
         self.hard_thres = hard_thres
         self._loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
+        # self._loss_fn = nn.BCEWithLogitsLoss(reduction="none")
 
     def forward(self, x, y):
         if self.hard_thres > 0:  # 硬标签
@@ -27,8 +28,23 @@ class BCE_VIRAT(nn.Module):
         # weight = torch.tensor([2.0869271159324994, 1.0968095583318394, 4.667857504911766, 1.6595608352187452, 3.6011781840303687, 2.6403159830224547, 4.869071729774468], device=x.device)
         # pos_weight = torch.tensor([1.954460531501126, 0.6904418649003278, 4.658420747351811, 1.4485650738429943, 3.5735073030418634, 2.5663047647752473, 4.861361591348501], device=x.device)
         # _loss_fn = nn.BCEWithLogitsLoss(reduction="mean", weight=weight, pos_weight=pos_weight)
-        loss = self._loss_fn(x, y)
-        # loss = _loss_fn(x, y)
+        weight = torch.tensor([1,1,1,1,1,1,1,0.1], device=x.device)
+        _loss_fn = nn.BCEWithLogitsLoss(reduction="mean", weight=weight)
+        # loss = self._loss_fn(x, y)
+        loss = _loss_fn(x, y)
+        '''
+        # acsl
+        with torch.no_grad():
+            sigmoid_cls_logits = torch.sigmoid(x)
+        weight_mask = sigmoid_cls_logits.ge(0.5)
+        weight_mask = weight_mask + y.to(torch.bool)
+
+        # 新增背景类赋予0.1的权值
+        # weight_mask = torch.where(weight_mask, torch.tensor(1,device=x.device).float(), torch.tensor(0.5,device=x.device).float())
+
+        n_i, _ = sigmoid_cls_logits.size()
+        loss = torch.sum(weight_mask * loss) / n_i
+        '''
         return loss
 
 if __name__ == '__main__':

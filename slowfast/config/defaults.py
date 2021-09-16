@@ -231,6 +231,33 @@ _C.X3D.BN_LIN5 = False
 # convolution operation of the residual blocks.
 _C.X3D.CHANNELWISE_3x3x3 = True
 
+_C.X3DBBN = CfgNode()
+
+# Width expansion factor.
+_C.X3DBBN.WIDTH_FACTOR = 1.0
+
+# Depth expansion factor.
+_C.X3DBBN.DEPTH_FACTOR = 1.0
+
+# Bottleneck expansion factor for the 3x3x3 conv.
+_C.X3DBBN.BOTTLENECK_FACTOR = 1.0  #
+
+# Dimensions of the last linear layer before classificaiton.
+_C.X3DBBN.DIM_C5 = 2048
+
+# Dimensions of the first 3x3 conv layer.
+_C.X3DBBN.DIM_C1 = 12
+
+# Whether to scale the width of Res2, default is false.
+_C.X3DBBN.SCALE_RES2 = False
+
+# Whether to use a BatchNorm (BN) layer before the classifier, default is false.
+_C.X3DBBN.BN_LIN5 = False
+
+# Whether to use channelwise (=depthwise) convolution in the center (3x3x3)
+# convolution operation of the residual blocks.
+_C.X3DBBN.CHANNELWISE_3x3x3 = True
+
 # -----------------------------------------------------------------------------
 # Nonlocal options
 # -----------------------------------------------------------------------------
